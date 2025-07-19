@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity ^0.8.28;
+
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+
+/// @dev This interface MAY be used with ERC-165 for discoverability.
+/// @dev Supporting ERC-165 is RECOMMENDED but NOT REQUIRED.
+interface INET is IERC165 {
+    /// @notice A short name to identify the resource
+    /// @return The name of the resource
+    function name() external view returns (string memory);
+    
+    /// @notice A short symbol to identify the resource
+    /// @return The symbol of the resource
+    function symbol() external view returns (string memory);
+    
+    /// @notice The number of decimals used to represent amounts
+    /// @return The number of decimals
+    function decimals() external view returns (uint8);
+
+    /// @notice The rate of decay of tokens at a location address
+    /// @return The rate of linear decay in token-WEI per second
+    function decayRate() external view returns (uint256);
+    
+    /// @notice Returns the decayed amount of resource at a given address
+    /// @param location The address to query
+    /// @return amount The decayed amount currently attributed to the address
+    function amountAt(address location) external view returns (uint256 amount);
+    
+    /// @notice Moves resource from the caller to another address
+    /// @param to The address to receive the resource
+    /// @param amount The amount to move
+    function move(address to, uint256 amount) external;
+    
+    /// @notice Creates new resource and assigns it to the specified address
+    /// @param to The address to receive the newly created resource
+    /// @param amount The amount of resource to create
+    function create(address to, uint256 amount) external;
+    
+    /// @notice Emitted when resource is moved between addresses
+    /// @param from The address from which resource was moved
+    /// @param to The address to which resource was moved
+    /// @param amount The amount of resource moved
+    event Moved(address indexed from, address indexed to, uint256 amount);
+}
+
+/// @title PyrrhoNET
+/// @notice A fungible token design that is intentionally not compatible with conventional tokens and related DeFi protocols.
+/// @dev INET compliant - Submitted as ECR-7974 https://eips.ethereum.org/erc
+/// @author S.E.
+/// @custom:security-contact https://github.com/sewing848/
+contract PyrrhoNET is INET, ERC165 {
+
+    /// @dev The human-readable name of this token resource
+    string private constant NAME = "PyrrhoNET";
+    
+    /// @dev The short symbol identifier for this token resource  
+    string private constant SYMBOL = "PYONET";
+    
+    /// @dev Number of decimal places for token amounts (fixed at 18)
+    uint8 private constant DECIMALS = 18;
+    
+    /// @dev Rate of linear decay in token-wei per second
+    uint256 private constant DECAY_RATE = 1e15;
+
+    /// @notice The total raw (pre-decay) amount of resource across all accounts
+    uint256 public totalAmount;
+
+    /// @dev Stores the raw amount of resource assigned to each address
+    mapping(address => uint256) internal rawAmounts;
+
+    /// @dev Stores the last block timestamp when an address was updated
+    mapping(address => uint256) internal lastUpdated;
+
+    /// @inheritdoc INET
+    function name() external pure returns (string memory) {
+        return NAME;
+    }
+
+    /// @inheritdoc INET
+    function symbol() external pure returns (string memory) {
+        return SYMBOL;
+    }
+
+    /// @inheritdoc INET
+    function decimals() external pure returns (uint8) {
+        return DECIMALS;
+    }
+
+    /// @inheritdoc INET
+    function decayRate() external pure returns (uint256) {
+        return DECAY_RATE;
+    }
+
+    /// @inheritdoc INET
+    function amountAt(address location) public view returns (uint256) {
+        if (lastUpdated[location] == 0) {
+            return 0;
+        }
+
+        uint256 timeElapsed = block.timestamp - lastUpdated[location];
+        uint256 raw = rawAmounts[location];
+
+        uint256 decay = DECAY_RATE * timeElapsed;
+        return decay >= raw ? 0 : raw - decay;
+    }
+
+    /// @inheritdoc INET
+    function move(address to, uint256 amount) external {
+        require(to != address(0), "Cannot move to zero address");
+        require(to != address(this), "Cannot move to contract address");
+
+        _update(msg.sender);
+        _update(to);
+
+        uint256 available = rawAmounts[msg.sender];
+        require(amount <= available, "Insufficient amount");
+
+        rawAmounts[msg.sender] -= amount;
+        rawAmounts[to] += amount;
+
+        emit Moved(msg.sender, to, amount);
+    }
+
+    /// @inheritdoc INET
+    function create(address to, uint256 amount) external {
+        require(to != address(0), "Cannot create to zero address");
+        require(to != address(this), "Cannot create to contract address");
+
+        _update(to);
+        require(type(uint256).max - totalAmount >= amount, "Total amount overflow");
+
+        rawAmounts[to] += amount;
+        totalAmount += amount;
+
+        emit Moved(address(0), to, amount);
+    }
+
+    /// @notice Public helper to trigger an update of caller’s decay-adjusted amount
+    function updateSelf() external {
+        _update(msg.sender);
+    }
+
+    /// @dev Internal function to apply decay and update a specific address
+    /// @param location The address whose amount should be updated
+    function _update(address location) internal {
+        uint256 updatedAmount = amountAt(location);
+        totalAmount = totalAmount - rawAmounts[location] + updatedAmount;
+        rawAmounts[location] = updatedAmount;
+        lastUpdated[location] = block.timestamp;
+    }
+
+    /// @notice Indicates support for the INET interface via ERC-165
+    /// @param interfaceId The interface identifier, as specified in ERC-165
+    /// @return true if the contract implements the specified interface
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(INET).interfaceId || super.supportsInterface(interfaceId);
+    }
+
+    /// @notice Returns the interface identifier for the INET standard
+    /// @return The bytes4 interface identifier for INET
+    function getINETInterfaceId() external pure returns (bytes4) {
+        return type(INET).interfaceId;
+    }
+
+    /// @notice Returns true if this contract implements the INET standard
+    /// @return True if this contract supports the INET interface
+    function isNET() external pure returns (bool) {
+        return true;
+    }
+}
+
+/*
+
+ Copyright 2025 S.E.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+*/
